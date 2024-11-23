@@ -1,0 +1,12 @@
+api:
+  address: 0.0.0.0
+  port: 8080
+  timeout: 30
+
+database:
+  host: localhost
+  port: 5432
+  type: postgres
+  name: web_app
+  username: web_app
+  password: admin

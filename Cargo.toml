@@ -1,0 +1,18 @@
+[package]
+name = "web-app1"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+config = "0.14"
+serde = { version = "1.0", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = { version = "1.0"}
+anyhow = {version = "1.0"}
+tokio = { version = "1.41", features = ["full"] }
+tower = { version = "0.5", features = ["timeout"] }
+tower-http = { version = "0.6", features = ["timeout", "trace"] }
+clap = {version = "4.5", features = ["derive"]}
+axum = { version = "0.7", features = ["tracing", "macros"] }
+once_cell = {version = "1.20"}
