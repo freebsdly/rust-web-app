@@ -1,9 +1,9 @@
+use crate::server::{ServiceManager, ServiceManagerArgs};
 use clap::{Args, Parser, Subcommand};
 use config::Config;
 use serde::Deserialize;
 use tokio::{select, signal};
-use tracing::{info};
-use crate::server::{Server, ServerArgs};
+use tracing::info;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -33,13 +33,12 @@ pub fn parse_settings<'a, T: Deserialize<'a>>(path: &str) -> Result<T, anyhow::E
         .build()?;
 
     Ok(settings.try_deserialize::<T>()?)
-
 }
 
 pub fn start_server(args: StartServerArgs) -> Result<(), anyhow::Error> {
     info!("starting server using configuration: {:?}", args.path);
-    let server_args = parse_settings::<ServerArgs>(&*args.path)?;
-    let mut server = Server::new(server_args)?;
+    let server_args = parse_settings::<ServiceManagerArgs>(&*args.path)?;
+    let mut server = ServiceManager::new(server_args.clone())?;
     server.start()?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -74,7 +73,6 @@ pub fn start_server(args: StartServerArgs) -> Result<(), anyhow::Error> {
             },
         }
     })
-
 }
 
 pub fn run_cli() -> Result<(), anyhow::Error> {

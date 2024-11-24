@@ -1,77 +1,81 @@
-use crate::api::{ApiServer, ApiServerArgs};
+
+use std::sync::{OnceLock};
+use crate::api::{ApiService, ApiServiceArgs};
 use serde::Deserialize;
-use std::cell::RefCell;
-use std::fmt::{Debug, Display, Formatter};
-use std::rc::Rc;
-use std::sync::Arc;
+use std::fmt::{Debug};
 use std::time::Duration;
 use tokio::runtime::Runtime;
-use tokio::{select, signal};
-use tokio::time::sleep;
+use tokio::task::JoinHandle;
 use tracing::{debug, info};
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct DatabaseArgs {
     #[serde(alias = "type")]
-    db_type: String,
+    pub db_type: String,
     #[serde(alias = "host")]
-    db_host: String,
+    pub db_host: String,
     #[serde(alias = "port")]
-    db_port: u16,
+    pub db_port: u16,
     #[serde(alias = "name")]
-    db_name: String,
-    username: String,
-    password: String,
+    pub db_name: String,
+    pub username: String,
+    pub password: String,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct ServerArgs {
+pub struct ServiceManagerArgs {
     #[serde(alias = "common")]
-    api: ApiServerArgs,
+    pub(crate) api: ApiServiceArgs,
     #[serde(alias = "database")]
     pub database: DatabaseArgs,
 }
 
-pub struct Server {
-    args: ServerArgs,
-    api_server: ApiServer,
+pub struct ServiceManager {
+    args: OnceLock<ServiceManagerArgs>,
     runtime: Runtime,
+    api_server_handle: Option<JoinHandle<()>>
 }
 
-impl Server {
-    pub fn new(args: ServerArgs) -> Result<Self, anyhow::Error> {
+impl ServiceManager {
+    pub fn new(args: ServiceManagerArgs) -> Result<Self, anyhow::Error> {
         debug!("Creating server args: {:?}", args.clone());
-        let api_server = ApiServer::new(args.api.clone());
         let runtime = Runtime::new()?;
-        Ok(Server {
-            args,
-            api_server,
+        Ok(Self {
+            args: OnceLock::from(args),
             runtime,
+            api_server_handle: None,
         })
     }
 
-    pub fn start(&self) -> Result<(), anyhow::Error> {
-        info!("Starting Server");
-        let api_cfg = self.args.api.clone();
-
-        let result = self.runtime.spawn( async {
-            info!("Starting API server");
-            let api_server = ApiServer::new(api_cfg);
-            api_server.start().await.expect("API server error");
-        });
-
-        // self.runtime.block_on(async {
-        //     self.runtime.spawn(async move {
-        //         info!("Starting MQ server");
-        //         sleep(Duration::from_secs(10)).await;
-        //         info!("MQ server started Successfuly");
-        //     });
-        // });
-        info!("Server started successfully");
+    pub fn start(&mut self) -> Result<(), anyhow::Error> {
+        self.start_api_service()?;
         Ok(())
     }
 
-    pub fn stop(&self) -> Result<(), anyhow::Error> {
+    fn start_api_service(&mut self) -> Result<(), anyhow::Error> {
+        // TODO: 使用channel启动stop线程
+        let api_cfg = self.args.take().unwrap().api;
+        let api_server_handle = self.runtime.spawn( async {
+            info!("Starting API service");
+            let mut api_server = ApiService::new(api_cfg);
+            api_server.start().await.expect("API service error");
+        });
+        self.api_server_handle = Some(api_server_handle);
+        Ok(())
+    }
+
+    fn start_mq_service(&mut self) -> Result<(), anyhow::Error> {
+        info!("Starting MQ service");
+        Ok(())
+    }
+
+    pub fn stop(&mut self) -> Result<(), anyhow::Error> {
+        info!("Stopping Server");
+        if let Some(handle) = self.api_server_handle.take() {
+            handle.abort()
+        }
+        std::thread::sleep(Duration::from_secs(2));
+        info!("Server stopped successfully");
         Ok(())
     }
 }

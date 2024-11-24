@@ -1,4 +1,3 @@
-use crate::server::ServerArgs;
 use axum::error_handling::HandleErrorLayer;
 use axum::http::{Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
@@ -9,8 +8,8 @@ use std::fmt::Debug;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
-use tokio::sync::oneshot::{Receiver, Sender};
+use tokio::sync::broadcast;
+use tokio::time::sleep;
 use tower::ServiceBuilder;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
@@ -71,39 +70,33 @@ pub async fn handle_error(
 
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct ApiServerArgs {
+pub struct ApiServiceArgs {
     #[serde(alias = "address")]
     pub address: String,
     pub port: u16,
     pub timeout: u64,
 }
 
-pub struct ApiServer {
-    args: ApiServerArgs,
-    sender: Sender<()>,
-    receiver: Receiver<()>,
+pub struct ApiService {
+    args: ApiServiceArgs,
+    tx: broadcast::Sender<()>,
 }
 
-impl ApiServer {
-    pub fn new(args: ApiServerArgs) -> Self {
-        let (tx, rx) = oneshot::channel::<()>();
-        Self { args, sender: tx, receiver: rx }
+impl ApiService {
+    pub fn new(args: ApiServiceArgs) -> Self {
+        let (tx, _) = broadcast::channel::<()>(1);
+        Self { args, tx }
     }
 
-    pub async fn start(&self) -> Result<(), anyhow::Error> {
+    pub async fn start(&mut self) -> Result<(), anyhow::Error> {
         // Create a regular axum app.
         let app = Router::new()
             .route("/health", get(Self::health))
             .fallback(handler_404)
-            // Graceful shutdown will wait for outstanding requests to complete. Add a timeout so
-            // requests don't hang forever.
-            // .layer(TimeoutLayer::new(Duration::from_secs(self.args.timeout))
-            .layer((
-                TraceLayer::new_for_http(),
-                // Graceful shutdown will wait for outstanding requests to complete. Add a timeout so
-                // requests don't hang forever.
-                TimeoutLayer::new(Duration::from_secs(self.args.timeout)),
-            ))
+            // request trace
+            .layer(TraceLayer::new_for_http())
+            // request timeout
+            .layer(TimeoutLayer::new(Duration::from_secs(self.args.timeout)))
             .layer(ServiceBuilder::new()
                 .layer(HandleErrorLayer::new(handle_error))
                 .timeout(Duration::from_secs(self.args.timeout))
@@ -114,17 +107,23 @@ impl ApiServer {
         let listener = TcpListener::bind(addr).await?;
         info!("listening on {}", listener.local_addr()?);
         // Run the server with graceful shutdown
+        let mut rx = self.tx.subscribe();
         let _ = serve(listener, app)
-            // .with_graceful_shutdown(async { })
+            .with_graceful_shutdown(async move {
+                let _ = rx.recv().await;
+            })
             .await;
         Ok(())
     }
 
     fn stop(&self) -> Result<(), anyhow::Error> {
+        self.tx.send(()).expect("send stop sig failed");
+        info!("Stopping ApiService");
         Ok(())
     }
 
     async fn health() -> ApiResponse<String> {
+        // sleep(Duration::from_secs(1)).await;
         ApiResponse::ok(None::<String>)
     }
 }

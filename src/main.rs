@@ -6,6 +6,7 @@ use tracing_subscriber::{fmt, EnvFilter};
 mod cli;
 mod server;
 mod api;
+mod db;
 
 fn main() -> Result<(), anyhow::Error>{
     tracing_subscriber::registry()
