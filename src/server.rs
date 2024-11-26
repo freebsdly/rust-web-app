@@ -3,7 +3,6 @@ use std::sync::{OnceLock};
 use crate::api::{ApiService, ApiServiceArgs};
 use serde::Deserialize;
 use std::fmt::{Debug};
-use std::time::Duration;
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 use tracing::{debug, info};
@@ -33,48 +32,74 @@ pub struct ServiceManagerArgs {
 pub struct ServiceManager {
     args: OnceLock<ServiceManagerArgs>,
     runtime: Runtime,
-    api_server_handle: Option<JoinHandle<()>>
+    api_service_handle: Option<JoinHandle<()>>,
+    mq_service_handle: Option<JoinHandle<()>>,
+    db_service_handle: Option<JoinHandle<()>>,
 }
 
 impl ServiceManager {
     pub fn new(args: ServiceManagerArgs) -> Result<Self, anyhow::Error> {
-        debug!("Creating server args: {:?}", args.clone());
+        debug!("server args: {:?}", args.clone());
         let runtime = Runtime::new()?;
         Ok(Self {
             args: OnceLock::from(args),
             runtime,
-            api_server_handle: None,
+            api_service_handle: None,
+            mq_service_handle: None,
+            db_service_handle: None,
         })
     }
 
     pub fn start(&mut self) -> Result<(), anyhow::Error> {
+        self.start_db_service()?;
+        self.start_mq_service()?;
         self.start_api_service()?;
         Ok(())
     }
 
     fn start_api_service(&mut self) -> Result<(), anyhow::Error> {
-        // TODO: 使用channel启动stop线程
-        let api_cfg = self.args.take().unwrap().api;
-        let api_server_handle = self.runtime.spawn( async {
+        let api_cfg = self.args.take().unwrap().api.clone();
+        let api_service_handle = self.runtime.spawn( async {
             info!("Starting API service");
             let mut api_server = ApiService::new(api_cfg);
             api_server.start().await.expect("API service error");
         });
-        self.api_server_handle = Some(api_server_handle);
+        self.api_service_handle = Some(api_service_handle);
         Ok(())
     }
 
     fn start_mq_service(&mut self) -> Result<(), anyhow::Error> {
-        info!("Starting MQ service");
+        let mq_service_handle = self.runtime.spawn( async {
+            info!("Starting MQ service");
+        });
+        self.mq_service_handle = Some(mq_service_handle);
+        Ok(())
+    }
+
+    fn start_db_service(&mut self) -> Result<(), anyhow::Error> {
+        let db_service_handle = self.runtime.spawn( async {
+            info!("Starting DB service");
+        });
+        self.db_service_handle = Some(db_service_handle);
         Ok(())
     }
 
     pub fn stop(&mut self) -> Result<(), anyhow::Error> {
-        info!("Stopping Server");
-        if let Some(handle) = self.api_server_handle.take() {
-            handle.abort()
+        info!("Stopping ServerManager gracefully");
+        Ok(())
+    }
+
+    pub fn stop_force(&mut self) -> Result<(), anyhow::Error> {
+        info!("Force to stop ServerManager");
+        if let Some(handle) = self.api_service_handle.take() {
+            handle.abort();
         }
-        std::thread::sleep(Duration::from_secs(2));
+        if let Some(handle) = self.mq_service_handle.take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.db_service_handle.take() {
+            handle.abort();
+        }
         info!("Server stopped successfully");
         Ok(())
     }

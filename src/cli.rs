@@ -4,6 +4,9 @@ use config::Config;
 use serde::Deserialize;
 use tokio::{select, signal};
 use tracing::info;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{fmt, EnvFilter};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -25,6 +28,8 @@ pub struct StartServerArgs {
     /// Configuration file path
     #[arg(short, long, default_value = "etc/web-app.yaml")]
     pub path: String,
+    #[arg(short, long)]
+    pub graceful_shutdown: bool,
 }
 
 pub fn parse_settings<'a, T: Deserialize<'a>>(path: &str) -> Result<T, anyhow::Error> {
@@ -61,12 +66,15 @@ pub fn start_server(args: StartServerArgs) -> Result<(), anyhow::Error> {
 
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
-
+    let with_graceful_shutdown = args.graceful_shutdown.clone();
     runtime.block_on(async {
         select! {
             _ = ctrl_c => {
-                info!("shutting down");
-                server.stop()
+                info!("receive ctrl_c to shutting down server");
+                if with_graceful_shutdown {
+                    return server.stop();
+                }
+                server.stop_force()
             },
             _ = terminate => {
                 Err(anyhow::anyhow!("signal handler exited unexpectedly"))
@@ -76,6 +84,11 @@ pub fn start_server(args: StartServerArgs) -> Result<(), anyhow::Error> {
 }
 
 pub fn run_cli() -> Result<(), anyhow::Error> {
+    tracing_subscriber::registry()
+        .with(EnvFilter::from_default_env())
+        .with(fmt::layer())
+        .init();
+
     let cli = AppCli::parse();
 
     match cli.command {
