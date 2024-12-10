@@ -1,6 +1,7 @@
-mod jwt;
 mod error;
+mod jwt;
 
+use crate::api::jwt::Claims;
 use axum::error_handling::HandleErrorLayer;
 use axum::http::{Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
@@ -11,17 +12,15 @@ use axum_prometheus::GenericMetricLayer;
 use axum_prometheus::Handle;
 use axum_prometheus::PrometheusMetricLayerBuilder;
 use serde::{Deserialize, Serialize};
-use std::fmt::{Debug};
+use std::fmt::Debug;
 use std::time::Duration;
-use thiserror::Error;
 use tokio::net::TcpListener;
-use tokio::sync::broadcast;
-use tokio::time::sleep;
+use tokio::select;
+use tokio_util::sync::CancellationToken;
 use tower::ServiceBuilder;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tracing::info;
-use crate::api::jwt::Claims;
 
 #[derive(Serialize, Debug)]
 pub struct ApiResponse<T> {
@@ -91,49 +90,70 @@ pub struct ApiServiceArgs {
 
 pub struct ApiService {
     args: ApiServiceArgs,
-    tx: broadcast::Sender<()>,
+    cancel_token: CancellationToken,
 }
 
 impl ApiService {
-    pub fn new(args: ApiServiceArgs) -> Self {
-        let (tx, _) = broadcast::channel::<()>(1);
-        Self { args, tx }
+    pub fn new(token: CancellationToken, args: ApiServiceArgs) -> Result<Self, anyhow::Error> {
+        Ok(Self {
+            cancel_token: token,
+            args,
+        })
     }
 
-    pub async fn start(&mut self) -> Result<(), anyhow::Error> {
-        // Create prometheus layer
+    fn protected_routes() -> Router {
+        Router::new().route("/test", get(Self::test))
+    }
+
+    fn opened_routes() -> Router {
+        Router::new().route("/health", get(Self::health))
+    }
+
+    pub fn start(&self) -> Result<(), anyhow::Error> {
+        info!("starting api service");
+        let token = self.cancel_token.clone();
+        let args = self.args.clone();
+        let addr = format!("{}:{}", args.address, args.port);
+        info!("listening on {}", addr);
+        let listener = std::net::TcpListener::bind(addr)?;
+        listener.set_nonblocking(true)?;
+        tokio::spawn(Self::start_app(token, listener, args));
+        Ok(())
+    }
+
+    async fn start_app(
+        token: CancellationToken,
+        listener: std::net::TcpListener,
+        args: ApiServiceArgs,
+    ) -> Result<(), anyhow::Error> {
         let (prometheus_layer, metric_handle) = Self::build_metrics();
         // Create a regular axum app.
         let app = Router::new()
-            .route("/test", get(Self::test))
-            .route("/health", get(Self::health))
+            .nest("/protected", Self::protected_routes())
+            .nest("/opened", Self::opened_routes())
             .route("/metrics", get(|| async move { metric_handle.render() }))
             .fallback(handler_404)
             // request trace
             .layer(TraceLayer::new_for_http())
             // request timeout
-            .layer(TimeoutLayer::new(Duration::from_secs(self.args.timeout)))
+            .layer(TimeoutLayer::new(Duration::from_secs(args.timeout)))
             // prometheus metric
             .layer(prometheus_layer)
             .layer(
                 ServiceBuilder::new()
                     .layer(HandleErrorLayer::new(handle_error))
-                    .timeout(Duration::from_secs(self.args.timeout)),
+                    .timeout(Duration::from_secs(args.timeout)),
             );
 
-        // Create a `TcpListener` using tokio.
-        let addr = format!("{}:{}", self.args.address, self.args.port);
-        let listener = TcpListener::bind(addr).await?;
-        info!("listening on {}", listener.local_addr()?);
+        let tcp_listener = TcpListener::from_std(listener)?;
         // Run the server with graceful shutdown
-        let mut rx = self.tx.subscribe();
-        let graceful_timeout = self.args.timeout.clone();
-        let _ = serve(listener, app)
+        let _ = serve(tcp_listener, app)
             .with_graceful_shutdown(async move {
-                let _ = rx.recv().await;
-                // wait for timeout to make request finished
-                info!("wait {} secs for graceful shutdown", graceful_timeout);
-                sleep(Duration::from_secs(graceful_timeout)).await;
+                select! {
+                    _ = token.cancelled() => {
+                        info!("received shutdown api service signal");
+                    },
+                }
             })
             .await;
         Ok(())
@@ -151,14 +171,13 @@ impl ApiService {
             .build_pair()
     }
 
-    fn stop(&self) -> Result<(), anyhow::Error> {
-        self.tx.send(()).expect("send stop sig failed");
+    pub fn stop(&self) -> Result<(), anyhow::Error> {
         info!("Stopping ApiService");
+        self.cancel_token.cancel();
         Ok(())
     }
 
     async fn health() -> ApiResponse<String> {
-        // sleep(Duration::from_secs(1)).await;
         ApiResponse::ok(None::<String>)
     }
 

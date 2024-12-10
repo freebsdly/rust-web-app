@@ -1,10 +1,11 @@
 
-use std::sync::{OnceLock};
+use std::sync::{Arc, OnceLock};
 use crate::api::{ApiService, ApiServiceArgs};
 use serde::Deserialize;
 use std::fmt::{Debug};
-use tokio::runtime::Runtime;
-use tokio::task::JoinHandle;
+use anyhow::anyhow;
+use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
 #[derive(Deserialize, Debug, Clone)]
@@ -31,76 +32,62 @@ pub struct ServiceManagerArgs {
 
 pub struct ServiceManager {
     args: OnceLock<ServiceManagerArgs>,
-    runtime: Runtime,
-    api_service_handle: Option<JoinHandle<()>>,
-    mq_service_handle: Option<JoinHandle<()>>,
-    db_service_handle: Option<JoinHandle<()>>,
+    parent_token: CancellationToken,
+    api_service: Arc<RwLock<ApiService>>,
 }
 
 impl ServiceManager {
     pub fn new(args: ServiceManagerArgs) -> Result<Self, anyhow::Error> {
         debug!("server args: {:?}", args.clone());
-        let runtime = Runtime::new()?;
+        let parent_token = CancellationToken::new();
+        let api_service = ApiService::new(parent_token.clone(), args.api.clone())?;
         Ok(Self {
             args: OnceLock::from(args),
-            runtime,
-            api_service_handle: None,
-            mq_service_handle: None,
-            db_service_handle: None,
+            parent_token,
+            api_service: Arc::new(RwLock::new(api_service)),
         })
     }
 
-    pub fn start(&mut self) -> Result<(), anyhow::Error> {
-        self.start_db_service()?;
-        self.start_mq_service()?;
+    pub fn start(&self) -> Result<(), anyhow::Error> {
         self.start_api_service()?;
         Ok(())
     }
 
-    fn start_api_service(&mut self) -> Result<(), anyhow::Error> {
-        let api_cfg = self.args.take().unwrap().api.clone();
-        let api_service_handle = self.runtime.spawn( async {
-            info!("Starting API service");
-            let mut api_server = ApiService::new(api_cfg);
-            api_server.start().await.expect("API service error");
-        });
-        self.api_service_handle = Some(api_service_handle);
-        Ok(())
-    }
-
-    fn start_mq_service(&mut self) -> Result<(), anyhow::Error> {
-        let mq_service_handle = self.runtime.spawn( async {
-            info!("Starting MQ service");
-        });
-        self.mq_service_handle = Some(mq_service_handle);
-        Ok(())
-    }
-
-    fn start_db_service(&mut self) -> Result<(), anyhow::Error> {
-        let db_service_handle = self.runtime.spawn( async {
-            info!("Starting DB service");
-        });
-        self.db_service_handle = Some(db_service_handle);
-        Ok(())
-    }
-
-    pub fn stop(&mut self) -> Result<(), anyhow::Error> {
+    pub fn stop(&self) -> Result<(), anyhow::Error> {
         info!("Stopping ServerManager gracefully");
+        self.stop_api_service()?;
         Ok(())
     }
 
-    pub fn stop_force(&mut self) -> Result<(), anyhow::Error> {
-        info!("Force to stop ServerManager");
-        if let Some(handle) = self.api_service_handle.take() {
-            handle.abort();
-        }
-        if let Some(handle) = self.mq_service_handle.take() {
-            handle.abort();
-        }
-        if let Some(handle) = self.db_service_handle.take() {
-            handle.abort();
-        }
-        info!("Server stopped successfully");
+    pub fn stop_force(&self) -> Result<(), anyhow::Error> {
+        info!("Stopping ServerManager force");
+        self.parent_token.cancel();
         Ok(())
+    }
+
+    fn start_api_service(&self) -> Result<(), anyhow::Error> {
+       let api_service = self.api_service.clone();
+        let guard = api_service.try_write();
+        match guard {
+            Ok(guard) => {
+                guard.start()
+            }
+            Err(err) => {
+                Err(anyhow!(err))
+            }
+        }
+    }
+
+    fn stop_api_service(&self) -> Result<(), anyhow::Error> {
+        let api_service = self.api_service.clone();
+        let guard = api_service.try_write();
+        match guard {
+            Ok(service) => {
+                service.stop()
+            }
+            Err(err) => {
+                Err(anyhow!(err))
+            }
+        }
     }
 }

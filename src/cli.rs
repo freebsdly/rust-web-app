@@ -1,8 +1,9 @@
+use std::time::Duration;
 use crate::server::{ServiceManager, ServiceManagerArgs};
 use clap::{Args, Parser, Subcommand};
 use config::Config;
 use serde::Deserialize;
-use tokio::{select, signal};
+use tokio::{select, signal, time};
 use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -19,11 +20,10 @@ pub struct AppCli {
 #[derive(Subcommand)]
 pub enum SubCommands {
     /// Start the server
-    Start(StartServerArgs)
+    Start(StartServerArgs),
 }
 
-#[derive(Args)]
-#[derive(Debug)]
+#[derive(Args, Debug)]
 pub struct StartServerArgs {
     /// Configuration file path
     #[arg(short, long, default_value = "etc/web-app.yaml")]
@@ -40,15 +40,11 @@ pub fn parse_settings<'a, T: Deserialize<'a>>(path: &str) -> Result<T, anyhow::E
     Ok(settings.try_deserialize::<T>()?)
 }
 
-pub fn start_server(args: StartServerArgs) -> Result<(), anyhow::Error> {
+pub async fn start_server(args: StartServerArgs) -> Result<(), anyhow::Error> {
     info!("starting server using configuration: {:?}", args.path);
     let server_args = parse_settings::<ServiceManagerArgs>(&*args.path)?;
-    let mut server = ServiceManager::new(server_args.clone())?;
+    let server = ServiceManager::new(server_args.clone())?;
     server.start()?;
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
 
     let ctrl_c = async {
         signal::ctrl_c()
@@ -67,20 +63,22 @@ pub fn start_server(args: StartServerArgs) -> Result<(), anyhow::Error> {
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
     let with_graceful_shutdown = args.graceful_shutdown.clone();
-    runtime.block_on(async {
-        select! {
-            _ = ctrl_c => {
-                info!("receive ctrl_c to shutting down server");
-                if with_graceful_shutdown {
-                    return server.stop();
-                }
-                server.stop_force()
-            },
-            _ = terminate => {
-                Err(anyhow::anyhow!("signal handler exited unexpectedly"))
-            },
-        }
-    })
+    select! {
+        _ = ctrl_c => {
+            info!("receive ctrl_c to shutting down server");
+            if with_graceful_shutdown {
+                server.stop()?
+            } else {
+                server.stop_force()?
+            }
+        },
+        _ = terminate => {
+            info!("signal handler exited unexpectedly");
+            server.stop_force()?
+        },
+    }
+
+    Ok(time::sleep(Duration::from_secs(1)).await)
 }
 
 pub fn run_cli() -> Result<(), anyhow::Error> {
@@ -90,13 +88,14 @@ pub fn run_cli() -> Result<(), anyhow::Error> {
         .init();
 
     let cli = AppCli::parse();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
 
     match cli.command {
         Some(SubCommands::Start(start_server_args)) => {
-            start_server(start_server_args)
+            runtime.block_on(start_server(start_server_args))
         }
-        _ => {
-            Err(anyhow::Error::msg("not starting server"))
-        }
+        _ => Err(anyhow::Error::msg("not starting server")),
     }
 }
