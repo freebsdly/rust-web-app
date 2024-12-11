@@ -2,7 +2,10 @@ mod error;
 mod jwt;
 
 use crate::api::jwt::Claims;
+use crate::db::DbService;
+use crate::user::{UserInfo, UserService};
 use axum::error_handling::HandleErrorLayer;
+use axum::extract::{State};
 use axum::http::{Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -13,9 +16,12 @@ use axum_prometheus::Handle;
 use axum_prometheus::PrometheusMetricLayerBuilder;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
+use std::sync::Arc;
 use std::time::Duration;
+use axum_extra::extract::Query;
 use tokio::net::TcpListener;
 use tokio::select;
+use tokio::sync::{RwLock, RwLockReadGuard, TryLockError};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceBuilder;
 use tower_http::timeout::TimeoutLayer;
@@ -79,6 +85,10 @@ pub async fn handle_error(
         ),
     )
 }
+#[derive(Clone)]
+pub struct ApiState {
+    user_service: Arc<RwLock<UserService>>,
+}
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct ApiServiceArgs {
@@ -91,22 +101,33 @@ pub struct ApiServiceArgs {
 pub struct ApiService {
     args: ApiServiceArgs,
     cancel_token: CancellationToken,
+    db_service: Arc<RwLock<DbService>>,
+    user_service: Arc<RwLock<UserService>>,
 }
 
 impl ApiService {
-    pub fn new(token: CancellationToken, args: ApiServiceArgs) -> Result<Self, anyhow::Error> {
+    pub fn new(
+        token: CancellationToken,
+        args: ApiServiceArgs,
+        db_service: Arc<RwLock<DbService>>,
+    ) -> Result<Self, anyhow::Error> {
+        let user_service = UserService::new(db_service.clone());
         Ok(Self {
             cancel_token: token,
             args,
+            db_service,
+            user_service: Arc::new(RwLock::new(user_service)),
         })
     }
 
-    fn protected_routes() -> Router {
+    fn protected_routes() -> Router<Arc<ApiState>> {
         Router::new().route("/test", get(Self::test))
     }
 
-    fn opened_routes() -> Router {
-        Router::new().route("/health", get(Self::health))
+    fn opened_routes() -> Router<Arc<ApiState>> {
+        Router::new()
+            .route("/health", get(health))
+            .route("/badges", get(query_badges))
     }
 
     pub fn start(&self) -> Result<(), anyhow::Error> {
@@ -117,7 +138,11 @@ impl ApiService {
         info!("listening on {}", addr);
         let listener = std::net::TcpListener::bind(addr)?;
         listener.set_nonblocking(true)?;
-        tokio::spawn(Self::start_app(token, listener, args));
+        let app_state = ApiState {
+            user_service: self.user_service.clone(),
+        };
+        let state = Arc::new(app_state);
+        tokio::spawn(Self::start_app(token, listener, args, state));
         Ok(())
     }
 
@@ -125,10 +150,11 @@ impl ApiService {
         token: CancellationToken,
         listener: std::net::TcpListener,
         args: ApiServiceArgs,
+        state: Arc<ApiState>,
     ) -> Result<(), anyhow::Error> {
         let (prometheus_layer, metric_handle) = Self::build_metrics();
         // Create a regular axum app.
-        let app = Router::new()
+        let app = Router::<Arc<ApiState>>::new()
             .nest("/protected", Self::protected_routes())
             .nest("/opened", Self::opened_routes())
             .route("/metrics", get(|| async move { metric_handle.render() }))
@@ -143,7 +169,8 @@ impl ApiService {
                 ServiceBuilder::new()
                     .layer(HandleErrorLayer::new(handle_error))
                     .timeout(Duration::from_secs(args.timeout)),
-            );
+            )
+            .with_state(state);
 
         let tcp_listener = TcpListener::from_std(listener)?;
         // Run the server with graceful shutdown
@@ -177,11 +204,23 @@ impl ApiService {
         Ok(())
     }
 
-    async fn health() -> ApiResponse<String> {
-        ApiResponse::ok(None::<String>)
-    }
-
     async fn test(claims: Claims) -> ApiResponse<String> {
         ApiResponse::ok(Some(String::from("test")))
     }
+}
+
+#[derive(Deserialize)]
+struct BadgeQueryParams {
+    badges: Option<Vec<String>>,
+}
+
+async fn query_badges(State(state): State<Arc<ApiState>>, params: Query<BadgeQueryParams>) -> ApiResponse<Vec<UserInfo>> {
+    let service = state.user_service.read().await;
+    let badges = params.badges.clone().unwrap_or_default();
+    let result = service.query_user_infos(badges).await;
+    ApiResponse::ok(result.ok())
+}
+
+async fn health() -> ApiResponse<String> {
+    ApiResponse::ok(Some(String::from("healthy")))
 }

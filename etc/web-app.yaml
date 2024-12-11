@@ -2,11 +2,12 @@ api:
   address: 0.0.0.0
   port: 8080
   timeout: 30
+  use_jwt_auth: true
 
 database:
   host: localhost
   port: 5432
   type: postgres
-  name: web_app
-  username: web_app
+  name: postgres
+  username: qinhuajun
   password: admin

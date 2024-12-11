@@ -7,20 +7,7 @@ use anyhow::anyhow;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct DatabaseArgs {
-    #[serde(alias = "type")]
-    pub db_type: String,
-    #[serde(alias = "host")]
-    pub db_host: String,
-    #[serde(alias = "port")]
-    pub db_port: u16,
-    #[serde(alias = "name")]
-    pub db_name: String,
-    pub username: String,
-    pub password: String,
-}
+use crate::db::{DatabaseArgs, DbService};
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct ServiceManagerArgs {
@@ -34,17 +21,22 @@ pub struct ServiceManager {
     args: OnceLock<ServiceManagerArgs>,
     parent_token: CancellationToken,
     api_service: Arc<RwLock<ApiService>>,
+    db_service: Arc<RwLock<DbService>>,
 }
 
 impl ServiceManager {
-    pub fn new(args: ServiceManagerArgs) -> Result<Self, anyhow::Error> {
+    pub async fn new(args: ServiceManagerArgs) -> Result<Self, anyhow::Error> {
         debug!("server args: {:?}", args.clone());
         let parent_token = CancellationToken::new();
-        let api_service = ApiService::new(parent_token.clone(), args.api.clone())?;
+        let db_service = DbService::new(args.database.clone()).await?;
+        let db_service_arc = Arc::new(RwLock::new(db_service));
+        let api_service = ApiService::new(parent_token.clone(), args.api.clone(),db_service_arc.clone())?;
+
         Ok(Self {
             args: OnceLock::from(args),
             parent_token,
             api_service: Arc::new(RwLock::new(api_service)),
+            db_service: db_service_arc,
         })
     }
 
@@ -90,4 +82,5 @@ impl ServiceManager {
             }
         }
     }
+
 }

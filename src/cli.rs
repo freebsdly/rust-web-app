@@ -43,7 +43,7 @@ pub fn parse_settings<'a, T: Deserialize<'a>>(path: &str) -> Result<T, anyhow::E
 pub async fn start_server(args: StartServerArgs) -> Result<(), anyhow::Error> {
     info!("starting server using configuration: {:?}", args.path);
     let server_args = parse_settings::<ServiceManagerArgs>(&*args.path)?;
-    let server = ServiceManager::new(server_args.clone())?;
+    let server = ServiceManager::new(server_args.clone()).await?;
     server.start()?;
 
     let ctrl_c = async {

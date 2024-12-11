@@ -16,6 +16,7 @@ tower = { version = "0.5", features = ["timeout"] }
 tower-http = { version = "0.6", features = ["timeout", "trace"] }
 clap = {version = "4.5", features = ["derive"]}
 axum = { version = "0.7", features = ["tracing", "macros"] }
-axum-extra = {version = "0.9", features = ["typed-header"]}
+axum-extra = {version = "0.9", features = ["typed-header", "query"]}
 axum-prometheus = { version = "0.7" }
 jsonwebtoken = "9.3"
+sqlx =  { version = "0.8" ,features = ["macros", "runtime-tokio", "json", "postgres", "derive", "uuid", "ipnetwork"]}
