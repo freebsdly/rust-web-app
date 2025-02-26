@@ -5,9 +5,7 @@ use config::Config;
 use serde::Deserialize;
 use tokio::{select, signal, time};
 use tracing::info;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{fmt, EnvFilter};
+use crate::log::init_logging;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -26,7 +24,7 @@ pub enum SubCommands {
 #[derive(Args, Debug)]
 pub struct StartServerArgs {
     /// Configuration file path
-    #[arg(short, long, default_value = "etc/web-app.yaml")]
+    #[arg(short, long, default_value = "etc/api-server.yaml")]
     pub path: String,
     #[arg(short, long)]
     pub graceful_shutdown: bool,
@@ -81,20 +79,13 @@ pub async fn start_server(args: StartServerArgs) -> Result<(), anyhow::Error> {
     Ok(time::sleep(Duration::from_secs(1)).await)
 }
 
-pub fn run_cli() -> Result<(), anyhow::Error> {
-    tracing_subscriber::registry()
-        .with(EnvFilter::from_default_env())
-        .with(fmt::layer())
-        .init();
-
+pub async fn run_cli() -> Result<(), anyhow::Error> {
+    init_logging().await?;
     let cli = AppCli::parse();
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
 
     match cli.command {
         Some(SubCommands::Start(start_server_args)) => {
-            runtime.block_on(start_server(start_server_args))
+            start_server(start_server_args).await
         }
         _ => Err(anyhow::Error::msg("not starting server")),
     }

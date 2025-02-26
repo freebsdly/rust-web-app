@@ -100,6 +100,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c95c10ba0b00a02636238b814946408b1322d5ac4760326e6fb8ec956d85775"
 
 [[package]]
+name = "api-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "axum-extra",
+ "axum-prometheus",
+ "clap",
+ "config",
+ "jsonwebtoken",
+ "serde",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tower 0.5.1",
+ "tower-http 0.6.2",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "arraydeque"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2883,28 +2905,6 @@ name = "wasm-bindgen-shared"
 version = "0.2.95"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65fc09f10666a9f147042251e0dda9c18f166ff7de300607007e96bdebc1068d"
-
-[[package]]
-name = "web-app1"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "axum-extra",
- "axum-prometheus",
- "clap",
- "config",
- "jsonwebtoken",
- "serde",
- "sqlx",
- "thiserror",
- "tokio",
- "tokio-util",
- "tower 0.5.1",
- "tower-http 0.6.2",
- "tracing",
- "tracing-subscriber",
-]
 
 [[package]]
 name = "web-sys"

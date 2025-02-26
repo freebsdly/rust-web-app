@@ -1,20 +1,13 @@
 use crate::cli::run_cli;
-use std::process::exit;
 
 mod api;
 mod cli;
 mod server;
 mod db;
 mod user;
+mod log;
 
-fn main() -> Result<(), anyhow::Error> {
-    match run_cli() {
-        Ok(_) => {
-            exit(0);
-        }
-        Err(e) => {
-            eprintln!("{}", e);
-            exit(1);
-        }
-    }
+#[tokio::main]
+async fn main() -> Result<(), anyhow::Error> {
+   run_cli().await
 }

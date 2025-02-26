@@ -1,11 +1,11 @@
 mod error;
+mod interface;
 mod jwt;
 
-use crate::api::jwt::Claims;
+use crate::api::interface::{health, logging, query_badges, test};
 use crate::db::DbService;
-use crate::user::{UserInfo, UserService};
+use crate::user::{UserService};
 use axum::error_handling::HandleErrorLayer;
-use axum::extract::{State};
 use axum::http::{Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -18,10 +18,9 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
-use axum_extra::extract::Query;
 use tokio::net::TcpListener;
 use tokio::select;
-use tokio::sync::{RwLock, RwLockReadGuard, TryLockError};
+use tokio::sync::{RwLock};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceBuilder;
 use tower_http::timeout::TimeoutLayer;
@@ -120,14 +119,12 @@ impl ApiService {
         })
     }
 
-    fn protected_routes() -> Router<Arc<ApiState>> {
-        Router::new().route("/test", get(Self::test))
-    }
-
-    fn opened_routes() -> Router<Arc<ApiState>> {
+    fn routes() -> Router<Arc<ApiState>> {
         Router::new()
+            .route("/test", get(test))
             .route("/health", get(health))
             .route("/badges", get(query_badges))
+            .route("/logging", get(logging))
     }
 
     pub fn start(&self) -> Result<(), anyhow::Error> {
@@ -155,8 +152,7 @@ impl ApiService {
         let (prometheus_layer, metric_handle) = Self::build_metrics();
         // Create a regular axum app.
         let app = Router::<Arc<ApiState>>::new()
-            .nest("/protected", Self::protected_routes())
-            .nest("/opened", Self::opened_routes())
+            .nest("/api", Self::routes())
             .route("/metrics", get(|| async move { metric_handle.render() }))
             .fallback(handler_404)
             // request trace
@@ -203,24 +199,4 @@ impl ApiService {
         self.cancel_token.cancel();
         Ok(())
     }
-
-    async fn test(claims: Claims) -> ApiResponse<String> {
-        ApiResponse::ok(Some(String::from("test")))
-    }
-}
-
-#[derive(Deserialize)]
-struct BadgeQueryParams {
-    badges: Option<Vec<String>>,
-}
-
-async fn query_badges(State(state): State<Arc<ApiState>>, params: Query<BadgeQueryParams>) -> ApiResponse<Vec<UserInfo>> {
-    let service = state.user_service.read().await;
-    let badges = params.badges.clone().unwrap_or_default();
-    let result = service.query_user_infos(badges).await;
-    ApiResponse::ok(result.ok())
-}
-
-async fn health() -> ApiResponse<String> {
-    ApiResponse::ok(Some(String::from("healthy")))
 }

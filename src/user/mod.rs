@@ -2,7 +2,6 @@ use crate::db::DbService;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing_subscriber::fmt::format;
 
 #[derive(Deserialize, Serialize, sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct UserInfo {
